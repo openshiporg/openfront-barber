@@ -21,7 +21,9 @@ export async function publicSlots(db: Db, slug: string, serviceId: string, date:
   const { start, end } = businessDayRange(date, profile.timezone)
   const [hours, appointments, off] = await Promise.all([
     db.weeklyHours.findFirst({ where: { profileId: profile.id, dayOfWeek: dayOfWeekFor(date) } }),
-    db.appointment.findMany({ where: { profileId: profile.id, status: { in: [...OPEN] }, startsAt: { lt: end }, endsAt: { gt: start } }, select: { startsAt: true, endsAt: true } }),
+    // An appointment added by hand without an end time blocks its service length (30 minutes with no service).
+    db.appointment.findMany({ where: { profileId: profile.id, status: { in: [...OPEN] }, startsAt: { lt: end }, OR: [{ endsAt: { gt: start } }, { endsAt: null, startsAt: { gt: new Date(start.getTime() - 86_400_000) } }] }, select: { startsAt: true, endsAt: true, service: { select: { durationMinutes: true } } } })
+      .then((rows) => rows.map((row) => ({ startsAt: row.startsAt, endsAt: row.endsAt ?? new Date(row.startsAt.getTime() + (row.service?.durationMinutes ?? 30) * 60_000) }))),
     db.timeOff.findMany({ where: { profileId: profile.id, startsAt: { lt: end }, endsAt: { gt: start } }, select: { startsAt: true, endsAt: true } }),
   ])
   const busy = [...appointments, ...off].filter((row): row is { startsAt: Date; endsAt: Date } => Boolean(row.startsAt && row.endsAt))
