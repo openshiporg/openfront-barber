@@ -102,10 +102,16 @@ export async function earnings(prisma: PrismaClient, session: Session | undefine
     prisma.payment.aggregate({ where, _sum: { amountCents: true, tipCents: true, productsCents: true } }),
     prisma.payment.groupBy({ by: ['method'], where, _sum: { amountCents: true, tipCents: true, productsCents: true } }),
     prisma.appointment.count({ where: { profileId: profile.id, status: 'completed', startsAt: { gte: from, lt: to } } }),
-    prisma.chairRental.findMany({ where: { profileId: profile.id, status: 'active' } }),
+    prisma.chairRental.findMany({ where: { profileId: profile.id } }),
   ])
-  const days = Math.max(1, (to.getTime() - from.getTime()) / 86_400_000)
-  const rent = rentals.reduce((total, r) => total + Math.round(r.rentCents * (days / (r.period === 'weekly' ? 7 : 30))), 0)
+  // Rent counts only for the days a rental ran inside the range: from its start (or its creation) to its end. An
+  // ended rental with no end date is taken to have ended when it was last changed.
+  const rent = rentals.reduce((total, r) => {
+    const runsFrom = Math.max(from.getTime(), (r.startsOn ?? r.createdAt).getTime())
+    const runsTo = Math.min(to.getTime(), (r.endsOn ?? (r.status === 'ended' ? r.updatedAt : to)).getTime())
+    const days = Math.max(0, (runsTo - runsFrom) / 86_400_000)
+    return total + Math.round(r.rentCents * (days / (r.period === 'weekly' ? 7 : 30)))
+  }, 0)
   return {
     servicesCents: sum._sum.amountCents ?? 0, tipsCents: sum._sum.tipCents ?? 0, productsCents: sum._sum.productsCents ?? 0, visits, rentCents: rent,
     byMethod: byMethod.map((row) => ({ method: row.method, cents: (row._sum.amountCents ?? 0) + (row._sum.tipCents ?? 0) + (row._sum.productsCents ?? 0) })),
