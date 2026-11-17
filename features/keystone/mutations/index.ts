@@ -6,7 +6,7 @@ import type { PrismaClient } from '@prisma/client'
 import redirectToInit from './redirectToInit'
 import type { Session } from '../access'
 import { CommandError, fail, ok, requireOwnProfile } from '../utils/business'
-import { bookAppointment, cancelByClient, confirmDeposit, publicSlots, readBooking, startDepositCheckout } from '../utils/commands'
+import { bookAppointment, cancelByClient, confirmDeposit, depositProvider, publicSlots, readBooking, startDepositCheckout } from '../utils/commands'
 import { cancelByBarber, checkoutAppointment, earnings, markNoShow, setupBusiness } from '../utils/staffCommands'
 
 const graphql = String.raw
@@ -52,10 +52,11 @@ export function extendGraphqlSchema(baseSchema: GraphQLSchema) {
         publicBusiness: async (_r: unknown, { slug }: { slug: string }, c: Ctx) => {
           const p = await c.prisma.barberProfile.findUnique({ where: { slug }, include: { services: { where: { active: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }, weeklyHours: true } })
           if (!p) return null
+          const takesDeposits = Boolean(await depositProvider(c.prisma, p.id))
           return {
             businessName: p.businessName, bio: p.bio, phone: p.phone, location: p.location, timezone: p.timezone, bookingOpen: p.bookingOpen, currencyCode: p.currencyCode,
             maxAdvanceDays: p.maxAdvanceDays, cancellationWindowHours: p.cancellationWindowHours,
-            services: p.services.map((s) => ({ id: s.id, name: s.name, description: s.description, priceCents: s.priceCents, durationMinutes: s.durationMinutes, depositCents: s.depositCents })),
+            services: p.services.map((s) => ({ id: s.id, name: s.name, description: s.description, priceCents: s.priceCents, durationMinutes: s.durationMinutes, depositCents: takesDeposits ? s.depositCents : 0 })),
             hours: p.weeklyHours.map((h) => ({ dayOfWeek: h.dayOfWeek, isWorking: h.isWorking, startMinute: h.startMinute, endMinute: h.endMinute })),
           }
         },

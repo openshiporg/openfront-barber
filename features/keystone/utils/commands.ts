@@ -71,7 +71,8 @@ export async function bookAppointment(prisma: PrismaClient, input: { slug: strin
     if (client?.status === 'blocked') throw new CommandError('This time can’t be booked online. Contact your barber.')
     const [first, ...rest] = guest.name.split(/\s+/)
     client ??= await tx.client.create({ data: { profileId: profile.id, firstName: first, lastName: rest.join(' ') || undefined, phone: guest.phone || undefined, email: guest.email || undefined } })
-    const deposit = service.depositCents ?? 0
+    // With no online deposit provider the client cannot pay, so no deposit is asked and the booking is confirmed.
+    const deposit = (await depositProvider(tx, profile.id)) ? service.depositCents ?? 0 : 0
     const created = await tx.appointment.create({
       data: {
         profileId: profile.id, clientId: client.id, serviceId: service.id,
