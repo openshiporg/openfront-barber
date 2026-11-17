@@ -99,7 +99,9 @@ export async function depositProvider(db: Db, profileId: string) {
 
 /** What a client sees about their own booking. */
 export async function readBooking(db: Db, id: string, token: string) {
-  const a = await ownedByToken(db, id, token)
+  let a = await ownedByToken(db, id, token)
+  // A client whose browser never came back from Stripe has still paid; read any open Checkout back.
+  if (a.paymentStatus === 'unpaid' && a.depositCents > 0 && (await settleDeposit(db, a).catch(() => ({ paid: false }))).paid) a = await ownedByToken(db, id, token)
   return {
     id: a.id, status: a.status, paymentStatus: a.paymentStatus, startsAt: a.startsAt.toISOString(), serviceName: a.serviceNameSnapshot,
     priceCents: a.priceCents, depositCents: a.depositCents, businessName: a.profile.businessName, location: a.profile.location,
@@ -111,6 +113,7 @@ export async function readBooking(db: Db, id: string, token: string) {
 export async function startDepositCheckout(db: Db, id: string, token: string) {
   const a = await ownedByToken(db, id, token)
   if (!OPEN.includes(a.status as never) || a.paymentStatus !== 'unpaid' || a.depositCents <= 0) throw new CommandError('This booking has no deposit to pay.')
+  if ((await settleDeposit(db, a)).paid) throw new CommandError('Your deposit is already paid.')
   const provider = await depositProvider(db, a.profileId)
   if (!provider) throw new CommandError('Online deposits are not available. Pay your barber in person.')
   const origin = trustedOrigin()
@@ -129,6 +132,14 @@ export async function startDepositCheckout(db: Db, id: string, token: string) {
 /** Confirms a deposit by reading the Checkout Session back from Stripe, never from the browser. */
 export async function confirmDeposit(db: Db, id: string, token: string) {
   const a = await ownedByToken(db, id, token)
+  return settleDeposit(db, a)
+}
+
+/**
+ * Records a deposit Stripe has captured. Only a booking still waiting for its deposit becomes confirmed; a deposit
+ * paid after the booking was cancelled is recorded and refunded, so a cancelled visit never comes back.
+ */
+async function settleDeposit(db: Db, a: { id: string; profileId: string; status: string; paymentStatus: string }) {
   if (String(a.paymentStatus) !== 'unpaid') return { paid: true }
   const sessions = await db.paymentSession.findMany({ where: { appointmentId: a.id, status: 'pending' }, include: { paymentProvider: true } })
   for (const session of sessions) {
@@ -139,8 +150,10 @@ export async function confirmDeposit(db: Db, id: string, token: string) {
         const claimed = await tx.paymentSession.updateMany({ where: { id: session.id, status: 'pending' }, data: { status: 'captured', capturedAt: new Date() } })
         if (!claimed.count) return
         await tx.payment.create({ data: { profileId: a.profileId, appointmentId: a.id, method: 'stripe', kind: 'deposit', amountCents: session.amountCents, providerReference: session.providerPaymentId } })
-        await tx.appointment.update({ where: { id: a.id }, data: { paymentStatus: 'deposit_paid', status: 'confirmed' } })
+        await tx.appointment.update({ where: { id: a.id }, data: { paymentStatus: 'deposit_paid', ...(a.status === 'requested' ? { status: 'confirmed' as const } : {}) } })
       })
+      // Stripe refusing the refund leaves the deposit recorded as paid on the cancelled visit, for the barber to see.
+      if (a.status === 'cancelled') await refundDeposit(db, a.id, a.profileId).catch(() => console.error('[barber] late deposit refund failed'))
       return { paid: true }
     }
   }
