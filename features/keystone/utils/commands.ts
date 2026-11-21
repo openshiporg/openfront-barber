@@ -11,6 +11,40 @@ import { CommandError, type Db } from './business'
 
 const OPEN = ['requested', 'confirmed'] as const
 
+/** An online booking still waiting for its deposit. */
+const UNPAID_HOLD = { status: 'requested', paymentStatus: 'unpaid', source: 'online', depositCents: { gt: 0 } } as const
+
+const holdCutoff = (holdHours: number, now = Date.now()) => new Date(now - holdHours * 3_600_000)
+
+/** When an unpaid online booking stops holding its time. */
+export const holdEndsAt = (createdAt: Date, holdHours: number) => new Date(createdAt.getTime() + holdHours * 3_600_000)
+
+/**
+ * Releases online bookings whose deposit was not paid within the barber's hold ("Hold unpaid bookings for").
+ * There is no job runner, so this runs whenever times are read or booked, like deposits are read back from Stripe.
+ * Each one is checked with Stripe first: a deposit paid in a browser that never came back confirms the booking instead.
+ */
+export async function releaseUnpaidHolds(prisma: PrismaClient, profileId: string, appointmentId?: string) {
+  const profile = await prisma.barberProfile.findUnique({ where: { id: profileId }, select: { unpaidHoldHours: true } })
+  if (!profile) return 0
+  const stale = await prisma.appointment.findMany({
+    where: { profileId, ...UNPAID_HOLD, createdAt: { lt: holdCutoff(profile.unpaidHoldHours) }, ...(appointmentId ? { id: appointmentId } : {}) },
+    select: { id: true, profileId: true, status: true, paymentStatus: true }, take: 50,
+  })
+  let released = 0
+  for (const a of stale) {
+    if ((await settleDeposit(prisma, a).catch(() => ({ paid: false }))).paid) continue
+    const done = await prisma.appointment.updateMany({
+      where: { id: a.id, ...UNPAID_HOLD },
+      data: { status: 'cancelled', cancellationReason: `Deposit not paid within ${profile.unpaidHoldHours} hours; time released` },
+    })
+    if (!done.count) continue
+    released++
+    await prisma.paymentSession.updateMany({ where: { appointmentId: a.id, status: 'pending' }, data: { status: 'expired' } })
+  }
+  return released
+}
+
 /** Slots for one service on one day, from the barber's own hours, time off and bookings. */
 export async function publicSlots(db: Db, slug: string, serviceId: string, date: string) {
   if (!isDateKey(date)) throw new CommandError('Choose a valid date.')
@@ -22,7 +56,8 @@ export async function publicSlots(db: Db, slug: string, serviceId: string, date:
   const [hours, appointments, off] = await Promise.all([
     db.weeklyHours.findFirst({ where: { profileId: profile.id, dayOfWeek: dayOfWeekFor(date) } }),
     // An appointment added by hand without an end time blocks its service length (30 minutes with no service).
-    db.appointment.findMany({ where: { profileId: profile.id, status: { in: [...OPEN] }, startsAt: { lt: end }, OR: [{ endsAt: { gt: start } }, { endsAt: null, startsAt: { gt: new Date(start.getTime() - 86_400_000) } }] }, select: { startsAt: true, endsAt: true, service: { select: { durationMinutes: true } } } })
+    // An online booking whose deposit is past the hold no longer blocks its time, even before it is released.
+    db.appointment.findMany({ where: { profileId: profile.id, status: { in: [...OPEN] }, NOT: { ...UNPAID_HOLD, createdAt: { lt: holdCutoff(profile.unpaidHoldHours) } }, startsAt: { lt: end }, OR: [{ endsAt: { gt: start } }, { endsAt: null, startsAt: { gt: new Date(start.getTime() - 86_400_000) } }] }, select: { startsAt: true, endsAt: true, service: { select: { durationMinutes: true } } } })
       .then((rows) => rows.map((row) => ({ startsAt: row.startsAt, endsAt: row.endsAt ?? new Date(row.startsAt.getTime() + (row.service?.durationMinutes ?? 30) * 60_000) }))),
     db.timeOff.findMany({ where: { profileId: profile.id, startsAt: { lt: end }, endsAt: { gt: start } }, select: { startsAt: true, endsAt: true } }),
   ])
@@ -55,6 +90,8 @@ export async function bookAppointment(prisma: PrismaClient, input: { slug: strin
   const startsAt = new Date(input.startsAt)
   if (Number.isNaN(startsAt.getTime())) throw new CommandError('Choose a time.')
   const access = createPublicAccessToken()
+  const owner = await prisma.barberProfile.findUnique({ where: { slug: input.slug }, select: { id: true } })
+  if (owner) await releaseUnpaidHolds(prisma, owner.id)
 
   const appointment = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const profile = await tx.barberProfile.findUnique({ where: { slug: input.slug } })
@@ -105,7 +142,11 @@ export async function readBooking(db: Db, id: string, token: string) {
   let a = await ownedByToken(db, id, token)
   // A client whose browser never came back from Stripe has still paid; read any open Checkout back.
   if (a.paymentStatus === 'unpaid' && a.depositCents > 0 && (await settleDeposit(db, a).catch(() => ({ paid: false }))).paid) a = await ownedByToken(db, id, token)
+  if (a.status === 'requested' && (await releaseUnpaidHolds(db as PrismaClient, a.profileId, a.id))) a = await ownedByToken(db, id, token)
+  const waiting = a.status === 'requested' && a.paymentStatus === 'unpaid' && a.depositCents > 0 && a.source === 'online'
   return {
+    holdEndsAt: waiting ? holdEndsAt(a.createdAt, a.profile.unpaidHoldHours).toISOString() : null,
+    released: a.status === 'cancelled' && Boolean(a.cancellationReason?.startsWith('Deposit not paid')),
     id: a.id, status: a.status, paymentStatus: a.paymentStatus, startsAt: a.startsAt.toISOString(), serviceName: a.serviceNameSnapshot,
     priceCents: a.priceCents, depositCents: a.depositCents, businessName: a.profile.businessName, location: a.profile.location,
     phone: a.profile.phone, timezone: a.profile.timezone, canPayDeposit: a.paymentStatus === 'unpaid' && a.depositCents > 0 && OPEN.includes(a.status as never) && Boolean(await depositProvider(db, a.profileId)),
@@ -114,21 +155,27 @@ export async function readBooking(db: Db, id: string, token: string) {
 
 /** Opens (or reuses) a Stripe Checkout for the deposit and returns its URL. */
 export async function startDepositCheckout(db: Db, id: string, token: string) {
-  const a = await ownedByToken(db, id, token)
+  let a = await ownedByToken(db, id, token)
+  if (a.status === 'requested' && (await releaseUnpaidHolds(db as PrismaClient, a.profileId, a.id))) a = await ownedByToken(db, id, token)
+  if (a.status === 'cancelled' && a.cancellationReason?.startsWith('Deposit not paid')) throw new CommandError('The deposit was not paid in time, so this time was released. Book again from the booking page.')
   if (!OPEN.includes(a.status as never) || a.paymentStatus !== 'unpaid' || a.depositCents <= 0) throw new CommandError('This booking has no deposit to pay.')
   if ((await settleDeposit(db, a)).paid) throw new CommandError('Your deposit is already paid.')
   const provider = await depositProvider(db, a.profileId)
   if (!provider) throw new CommandError('Online deposits are not available. Pay your barber in person.')
   const origin = trustedOrigin()
   const back = `${origin}/booking/${encodeURIComponent(a.id)}?t=${encodeURIComponent(token)}`
+  // The card page closes when the hold ends (Stripe allows 30 minutes to 24 hours), so nobody pays for a released time.
+  const holdEnd = holdEndsAt(a.createdAt, a.profile.unpaidHoldHours).getTime()
+  const expiresAt = new Date(Math.min(Math.max(holdEnd, Date.now() + 31 * 60_000), Date.now() + 23.5 * 3_600_000))
   const result = await createPayment({
+    expiresAt: Math.floor(expiresAt.getTime() / 1000),
     provider: { code: provider.code }, amount: a.depositCents, currency: a.profile.currencyCode.toLowerCase(),
     description: `Deposit · ${a.serviceNameSnapshot ?? 'Appointment'}`, idempotencyKey: randomUUID(),
     successUrl: `${back}&paid=1`, cancelUrl: `${back}&paid=0`, customerEmail: a.client?.email ?? '',
     metadata: { appointmentId: a.id },
   }) as { id?: string; url?: string | null }
   if (!result.id || !result.url) throw new CommandError('The card page did not open. Try again.')
-  await db.paymentSession.create({ data: { profileId: a.profileId, appointmentId: a.id, paymentProviderId: provider.id, amountCents: a.depositCents, currencyCode: a.profile.currencyCode, providerPaymentId: result.id, expiresAt: new Date(Date.now() + 23 * 3_600_000) } })
+  await db.paymentSession.create({ data: { profileId: a.profileId, appointmentId: a.id, paymentProviderId: provider.id, amountCents: a.depositCents, currencyCode: a.profile.currencyCode, providerPaymentId: result.id, expiresAt } })
   return { url: result.url, sessionId: result.id }
 }
 

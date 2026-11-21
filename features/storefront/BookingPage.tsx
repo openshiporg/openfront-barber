@@ -2,7 +2,7 @@ import { command } from '@/features/platform/lib/request'
 import { Notice, money } from '@/features/platform/lib/ui'
 import { BookingStatus } from './BookingStatus'
 
-type Booking = { id: string; status: string; paymentStatus: string; startsAt: string; serviceName: string | null; priceCents: number; depositCents: number; businessName: string; location: string | null; phone: string | null; timezone: string; canPayDeposit: boolean }
+type Booking = { id: string; status: string; paymentStatus: string; startsAt: string; serviceName: string | null; priceCents: number; depositCents: number; businessName: string; location: string | null; phone: string | null; timezone: string; canPayDeposit: boolean; holdEndsAt: string | null; released: boolean }
 
 const label: Record<string, string> = { requested: 'Waiting for deposit', confirmed: 'Confirmed', completed: 'Completed', cancelled: 'Cancelled', no_show: 'Missed' }
 
@@ -22,6 +22,8 @@ export default async function BookingPage({ params, searchParams }: { params: Pr
           <div key={k} className="flex justify-between gap-4 bg-background px-4 py-2.5"><dt className="text-muted-foreground">{k}</dt><dd className="text-right">{v}</dd></div>
         ))}
       </dl>
+      {b.released ? <Notice tone="alert">The deposit was not paid in time, so this time was released for other clients. Book again if you still want a visit.</Notice> : null}
+      {b.holdEndsAt && b.canPayDeposit ? <Notice>Pay the deposit by {new Intl.DateTimeFormat('en-US', { timeZone: b.timezone, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(b.holdEndsAt))} to keep this time. After that it opens for other clients.</Notice> : null}
       {paid === '0' ? <Notice>Payment was not completed. You can try again below.</Notice> : null}
       {!b.depositCents && open ? <Notice>You are booked. Pay your barber in person.</Notice> : null}
       <BookingStatus id={b.id} token={t} canPay={b.canPayDeposit} open={open} returning={paid === '1' && b.paymentStatus === 'unpaid'} />

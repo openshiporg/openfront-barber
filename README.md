@@ -7,7 +7,7 @@ Openfront Barber is a self-hostable booking, payments and earnings application f
 ## What you get
 
 - **Your booking page** at `/book/your-address`: services, open times from your own hours and time off, and no double booking.
-- **Deposits** through Stripe Checkout. The deposit is confirmed by reading the payment back from Stripe. A client who cancels from their booking link before your cancellation window (24 hours by default) gets the deposit refunded to their card automatically; so does any booking you cancel.
+- **Deposits** through Stripe Checkout. The deposit is confirmed by reading the payment back from Stripe. A client who cancels from their booking link before your cancellation window (24 hours by default) gets the deposit refunded to their card automatically; so does any booking you cancel. A booking whose deposit is not paid in time stops holding its slot: set **Hold unpaid bookings for** in **Settings** (6 hours by default, 1 to 72). After that the booking is cancelled and the time opens for other clients, and the card page closes with it.
 - **Today**: open appointments with client notes and preferences; check out with price, tip, product sold and how the client paid (cash, card, Zelle/Venmo/Cash App); mark no-shows.
 - **Earnings**: services, tips and products for the last week, month or year, less chair rent.
 - **Clients, services, hours, time off, products and chair rental** under Models. A barber only ever sees their own records.
@@ -20,7 +20,7 @@ cp .env.example .env   # DATABASE_URL, SESSION_SECRET, optional STRIPE_SECRET_KE
 npm run dev
 ```
 
-Open `/dashboard`, create your account, then **Set up business** to choose your booking address and timezone. Leave **Start with a typical menu** ticked to begin with five services (with photos and deposits) and three retail products you can edit; your home page then shows your services, hours and a Book button. Set `STRIPE_SECRET_KEY` to take deposits online; without it clients are told to pay in person.
+Open `/dashboard`, create your account, then **Settings** to choose your booking address and timezone. Leave **Start with a typical menu** ticked to begin with five services (with photos and deposits) and three retail products you can edit; your home page then shows your services, hours and a Book button. Set `STRIPE_SECRET_KEY` to take deposits online; without it clients are told to pay in person.
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fopenshiporg%2Fopenfront-barber&env=DATABASE_URL%2CSESSION_SECRET)
 

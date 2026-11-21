@@ -6,7 +6,7 @@ import type { PrismaClient } from '@prisma/client'
 import redirectToInit from './redirectToInit'
 import type { Session } from '../access'
 import { CommandError, fail, ok, requireOwnProfile } from '../utils/business'
-import { bookAppointment, cancelByClient, confirmDeposit, depositProvider, publicSlots, readBooking, startDepositCheckout } from '../utils/commands'
+import { bookAppointment, cancelByClient, confirmDeposit, depositProvider, publicSlots, readBooking, releaseUnpaidHolds, startDepositCheckout } from '../utils/commands'
 import { cancelByBarber, checkoutAppointment, earnings, markNoShow, setupBusiness } from '../utils/staffCommands'
 
 const graphql = String.raw
@@ -26,7 +26,7 @@ async function publicBusiness(prisma: PrismaClient, where: { slug: string }) {
   const takesDeposits = Boolean(await depositProvider(prisma, p.id))
   return {
     slug: p.slug, businessName: p.businessName, bio: p.bio, photoPath: p.photoPath, phone: p.phone, location: p.location, timezone: p.timezone, bookingOpen: p.bookingOpen, currencyCode: p.currencyCode,
-    maxAdvanceDays: p.maxAdvanceDays, cancellationWindowHours: p.cancellationWindowHours,
+    maxAdvanceDays: p.maxAdvanceDays, cancellationWindowHours: p.cancellationWindowHours, unpaidHoldHours: p.unpaidHoldHours,
     services: p.services.map((s) => ({ id: s.id, name: s.name, description: s.description, photoPath: s.photoPath, priceCents: s.priceCents, durationMinutes: s.durationMinutes, depositCents: takesDeposits ? s.depositCents : 0 })),
     hours: p.weeklyHours.map((h) => ({ dayOfWeek: h.dayOfWeek, isWorking: h.isWorking, startMinute: h.startMinute, endMinute: h.endMinute })),
   }
@@ -68,7 +68,12 @@ export function extendGraphqlSchema(baseSchema: GraphQLSchema) {
           const first = await c.prisma.barberProfile.findFirst({ where: { bookingOpen: true }, orderBy: { createdAt: 'asc' }, select: { slug: true } })
           return first ? publicBusiness(c.prisma, { slug: first.slug }) : null
         },
-        publicSlots: (_r: unknown, a: { slug: string; serviceId: string; date: string }, c: Ctx) => run(() => publicSlots(c.prisma, a.slug, a.serviceId, a.date)),
+        publicSlots: (_r: unknown, a: { slug: string; serviceId: string; date: string }, c: Ctx) => run(async () => {
+          // Reading times is when bookings past the unpaid hold are released (there is no job runner).
+          const owner = await c.prisma.barberProfile.findUnique({ where: { slug: a.slug }, select: { id: true } })
+          if (owner) await releaseUnpaidHolds(c.prisma, owner.id).catch((e) => console.error('[barber] hold release failed', e instanceof Error ? e.message : e))
+          return publicSlots(c.prisma, a.slug, a.serviceId, a.date)
+        }),
         publicBooking: (_r: unknown, a: { id: string; token: string }, c: Ctx) => run(() => readBooking(c.prisma, a.id, a.token)),
         myEarnings: (_r: unknown, a: { from: string; to: string }, c: Ctx) => run(() => {
           const from = new Date(a.from); const to = new Date(a.to)

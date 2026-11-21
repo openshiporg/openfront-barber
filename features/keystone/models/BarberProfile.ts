@@ -37,6 +37,13 @@ export const BarberProfile = list({
     minNoticeHours: integer({ defaultValue: 2, validation: { isRequired: true, min: 0, max: 720 } }),
     maxAdvanceDays: integer({ defaultValue: 60, validation: { isRequired: true, min: 1, max: 365 } }),
     cancellationWindowHours: integer({ defaultValue: 24, validation: { isRequired: true, min: 0, max: 720 } }),
+    // Fresha lets salons pick 1 to 72 hours; Square and Booksy take the deposit at booking. 6 hours frees a prime slot the same day.
+    unpaidHoldHours: integer({
+      label: 'Hold unpaid bookings for',
+      defaultValue: 6,
+      validation: { isRequired: true, min: 1, max: 72 },
+      ui: { description: 'Hours an online booking waiting for its deposit keeps its time (1 to 72). After that it is cancelled and the time opens for other clients.' },
+    }),
     noShowFeeCents: integer({ defaultValue: 0, validation: { isRequired: true, min: 0 } }),
     workStyle: select({
       type: 'enum',

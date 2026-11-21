@@ -29,6 +29,7 @@ export default async function BookPage({ params, searchParams }: { params: Promi
         {!b.bookingOpen ? <Notice>Online booking is closed right now.{b.phone ? ` Call ${b.phone}.` : ''}</Notice>
           : !b.services.length ? <Notice>No services are listed yet.</Notice>
           : <BookingFlow key={service ?? ''} slug={slug} timezone={b.timezone} currency={b.currencyCode} maxAdvanceDays={b.maxAdvanceDays} services={b.services} initialServiceId={service} />}
+        {b.services.some((s) => s.depositCents > 0) ? <p className="text-xs text-muted-foreground">Pay the deposit within {b.unpaidHoldHours} {b.unpaidHoldHours === 1 ? 'hour' : 'hours'} of booking to keep your time; after that it opens for other clients.</p> : null}
         {b.cancellationWindowHours ? <p className="text-xs text-muted-foreground">Cancel from your booking link up to {b.cancellationWindowHours} hours before your time and any deposit is refunded to your card.</p> : null}
       </section>
       <section className="grid gap-3">

@@ -127,7 +127,7 @@ function sessionStatus(session) {
 function asString2(value) {
   return typeof value === "string" ? value : "";
 }
-async function createPaymentFunction2({ amount, currency, successUrl, cancelUrl, description, idempotencyKey, metadata, customerEmail }) {
+async function createPaymentFunction2({ amount, currency, successUrl, cancelUrl, description, idempotencyKey, metadata, customerEmail, expiresAt }) {
   const cents2 = Math.round(Number(amount));
   if (!Number.isSafeInteger(cents2) || cents2 <= 0) throw new Error("Payment amount must be greater than zero.");
   const meta = metadata && typeof metadata === "object" ? metadata : {};
@@ -136,6 +136,8 @@ async function createPaymentFunction2({ amount, currency, successUrl, cancelUrl,
     idempotencyKey: asString2(idempotencyKey) || void 0,
     body: form({
       mode: "payment",
+      // Unix seconds; Stripe accepts 30 minutes to 24 hours from now.
+      expires_at: Number.isSafeInteger(expiresAt) ? Number(expiresAt) : void 0,
       success_url: asString2(successUrl),
       cancel_url: asString2(cancelUrl),
       .../^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(asString2(customerEmail)) ? { customer_email: asString2(customerEmail) } : {},
@@ -698,6 +700,13 @@ var BarberProfile = (0, import_core7.list)({
     minNoticeHours: (0, import_fields6.integer)({ defaultValue: 2, validation: { isRequired: true, min: 0, max: 720 } }),
     maxAdvanceDays: (0, import_fields6.integer)({ defaultValue: 60, validation: { isRequired: true, min: 1, max: 365 } }),
     cancellationWindowHours: (0, import_fields6.integer)({ defaultValue: 24, validation: { isRequired: true, min: 0, max: 720 } }),
+    // Fresha lets salons pick 1 to 72 hours; Square and Booksy take the deposit at booking. 6 hours frees a prime slot the same day.
+    unpaidHoldHours: (0, import_fields6.integer)({
+      label: "Hold unpaid bookings for",
+      defaultValue: 6,
+      validation: { isRequired: true, min: 1, max: 72 },
+      ui: { description: "Hours an online booking waiting for its deposit keeps its time (1 to 72). After that it is cancelled and the time opens for other clients." }
+    }),
     noShowFeeCents: (0, import_fields6.integer)({ defaultValue: 0, validation: { isRequired: true, min: 0 } }),
     workStyle: (0, import_fields6.select)({
       type: "enum",
@@ -1395,6 +1404,30 @@ function publicAccessTokenMatches(token, expectedHash) {
 
 // features/keystone/utils/commands.ts
 var OPEN = ["requested", "confirmed"];
+var UNPAID_HOLD = { status: "requested", paymentStatus: "unpaid", source: "online", depositCents: { gt: 0 } };
+var holdCutoff = (holdHours, now = Date.now()) => new Date(now - holdHours * 36e5);
+var holdEndsAt = (createdAt, holdHours) => new Date(createdAt.getTime() + holdHours * 36e5);
+async function releaseUnpaidHolds(prisma, profileId, appointmentId) {
+  const profile = await prisma.barberProfile.findUnique({ where: { id: profileId }, select: { unpaidHoldHours: true } });
+  if (!profile) return 0;
+  const stale = await prisma.appointment.findMany({
+    where: { profileId, ...UNPAID_HOLD, createdAt: { lt: holdCutoff(profile.unpaidHoldHours) }, ...appointmentId ? { id: appointmentId } : {} },
+    select: { id: true, profileId: true, status: true, paymentStatus: true },
+    take: 50
+  });
+  let released = 0;
+  for (const a of stale) {
+    if ((await settleDeposit(prisma, a).catch(() => ({ paid: false }))).paid) continue;
+    const done = await prisma.appointment.updateMany({
+      where: { id: a.id, ...UNPAID_HOLD },
+      data: { status: "cancelled", cancellationReason: `Deposit not paid within ${profile.unpaidHoldHours} hours; time released` }
+    });
+    if (!done.count) continue;
+    released++;
+    await prisma.paymentSession.updateMany({ where: { appointmentId: a.id, status: "pending" }, data: { status: "expired" } });
+  }
+  return released;
+}
 async function publicSlots(db, slug, serviceId, date) {
   if (!isDateKey(date)) throw new CommandError("Choose a valid date.");
   const profile = await db.barberProfile.findUnique({ where: { slug } });
@@ -1405,7 +1438,8 @@ async function publicSlots(db, slug, serviceId, date) {
   const [hours, appointments, off] = await Promise.all([
     db.weeklyHours.findFirst({ where: { profileId: profile.id, dayOfWeek: dayOfWeekFor(date) } }),
     // An appointment added by hand without an end time blocks its service length (30 minutes with no service).
-    db.appointment.findMany({ where: { profileId: profile.id, status: { in: [...OPEN] }, startsAt: { lt: end }, OR: [{ endsAt: { gt: start } }, { endsAt: null, startsAt: { gt: new Date(start.getTime() - 864e5) } }] }, select: { startsAt: true, endsAt: true, service: { select: { durationMinutes: true } } } }).then((rows) => rows.map((row) => ({ startsAt: row.startsAt, endsAt: row.endsAt ?? new Date(row.startsAt.getTime() + (row.service?.durationMinutes ?? 30) * 6e4) }))),
+    // An online booking whose deposit is past the hold no longer blocks its time, even before it is released.
+    db.appointment.findMany({ where: { profileId: profile.id, status: { in: [...OPEN] }, NOT: { ...UNPAID_HOLD, createdAt: { lt: holdCutoff(profile.unpaidHoldHours) } }, startsAt: { lt: end }, OR: [{ endsAt: { gt: start } }, { endsAt: null, startsAt: { gt: new Date(start.getTime() - 864e5) } }] }, select: { startsAt: true, endsAt: true, service: { select: { durationMinutes: true } } } }).then((rows) => rows.map((row) => ({ startsAt: row.startsAt, endsAt: row.endsAt ?? new Date(row.startsAt.getTime() + (row.service?.durationMinutes ?? 30) * 6e4) }))),
     db.timeOff.findMany({ where: { profileId: profile.id, startsAt: { lt: end }, endsAt: { gt: start } }, select: { startsAt: true, endsAt: true } })
   ]);
   const busy = [...appointments, ...off].filter((row) => Boolean(row.startsAt && row.endsAt));
@@ -1435,6 +1469,8 @@ async function bookAppointment(prisma, input) {
   const startsAt = new Date(input.startsAt);
   if (Number.isNaN(startsAt.getTime())) throw new CommandError("Choose a time.");
   const access = createPublicAccessToken();
+  const owner = await prisma.barberProfile.findUnique({ where: { slug: input.slug }, select: { id: true } });
+  if (owner) await releaseUnpaidHolds(prisma, owner.id);
   const appointment = await prisma.$transaction(async (tx) => {
     const profile = await tx.barberProfile.findUnique({ where: { slug: input.slug } });
     if (!profile || !profile.bookingOpen) throw new CommandError("Online booking is closed.");
@@ -1483,7 +1519,11 @@ async function depositProvider(db, profileId) {
 async function readBooking(db, id, token) {
   let a = await ownedByToken(db, id, token);
   if (a.paymentStatus === "unpaid" && a.depositCents > 0 && (await settleDeposit(db, a).catch(() => ({ paid: false }))).paid) a = await ownedByToken(db, id, token);
+  if (a.status === "requested" && await releaseUnpaidHolds(db, a.profileId, a.id)) a = await ownedByToken(db, id, token);
+  const waiting = a.status === "requested" && a.paymentStatus === "unpaid" && a.depositCents > 0 && a.source === "online";
   return {
+    holdEndsAt: waiting ? holdEndsAt(a.createdAt, a.profile.unpaidHoldHours).toISOString() : null,
+    released: a.status === "cancelled" && Boolean(a.cancellationReason?.startsWith("Deposit not paid")),
     id: a.id,
     status: a.status,
     paymentStatus: a.paymentStatus,
@@ -1499,14 +1539,19 @@ async function readBooking(db, id, token) {
   };
 }
 async function startDepositCheckout(db, id, token) {
-  const a = await ownedByToken(db, id, token);
+  let a = await ownedByToken(db, id, token);
+  if (a.status === "requested" && await releaseUnpaidHolds(db, a.profileId, a.id)) a = await ownedByToken(db, id, token);
+  if (a.status === "cancelled" && a.cancellationReason?.startsWith("Deposit not paid")) throw new CommandError("The deposit was not paid in time, so this time was released. Book again from the booking page.");
   if (!OPEN.includes(a.status) || a.paymentStatus !== "unpaid" || a.depositCents <= 0) throw new CommandError("This booking has no deposit to pay.");
   if ((await settleDeposit(db, a)).paid) throw new CommandError("Your deposit is already paid.");
   const provider = await depositProvider(db, a.profileId);
   if (!provider) throw new CommandError("Online deposits are not available. Pay your barber in person.");
   const origin = trustedOrigin();
   const back = `${origin}/booking/${encodeURIComponent(a.id)}?t=${encodeURIComponent(token)}`;
+  const holdEnd = holdEndsAt(a.createdAt, a.profile.unpaidHoldHours).getTime();
+  const expiresAt = new Date(Math.min(Math.max(holdEnd, Date.now() + 31 * 6e4), Date.now() + 23.5 * 36e5));
   const result = await createPayment({
+    expiresAt: Math.floor(expiresAt.getTime() / 1e3),
     provider: { code: provider.code },
     amount: a.depositCents,
     currency: a.profile.currencyCode.toLowerCase(),
@@ -1518,7 +1563,7 @@ async function startDepositCheckout(db, id, token) {
     metadata: { appointmentId: a.id }
   });
   if (!result.id || !result.url) throw new CommandError("The card page did not open. Try again.");
-  await db.paymentSession.create({ data: { profileId: a.profileId, appointmentId: a.id, paymentProviderId: provider.id, amountCents: a.depositCents, currencyCode: a.profile.currencyCode, providerPaymentId: result.id, expiresAt: new Date(Date.now() + 23 * 36e5) } });
+  await db.paymentSession.create({ data: { profileId: a.profileId, appointmentId: a.id, paymentProviderId: provider.id, amountCents: a.depositCents, currencyCode: a.profile.currencyCode, providerPaymentId: result.id, expiresAt } });
   return { url: result.url, sessionId: result.id };
 }
 async function confirmDeposit(db, id, token) {
@@ -1738,6 +1783,7 @@ async function publicBusiness(prisma, where) {
     currencyCode: p.currencyCode,
     maxAdvanceDays: p.maxAdvanceDays,
     cancellationWindowHours: p.cancellationWindowHours,
+    unpaidHoldHours: p.unpaidHoldHours,
     services: p.services.map((s) => ({ id: s.id, name: s.name, description: s.description, photoPath: s.photoPath, priceCents: s.priceCents, durationMinutes: s.durationMinutes, depositCents: takesDeposits ? s.depositCents : 0 })),
     hours: p.weeklyHours.map((h) => ({ dayOfWeek: h.dayOfWeek, isWorking: h.isWorking, startMinute: h.startMinute, endMinute: h.endMinute }))
   };
@@ -1778,7 +1824,11 @@ function extendGraphqlSchema(baseSchema) {
           const first = await c.prisma.barberProfile.findFirst({ where: { bookingOpen: true }, orderBy: { createdAt: "asc" }, select: { slug: true } });
           return first ? publicBusiness(c.prisma, { slug: first.slug }) : null;
         },
-        publicSlots: (_r, a, c) => run(() => publicSlots(c.prisma, a.slug, a.serviceId, a.date)),
+        publicSlots: (_r, a, c) => run(async () => {
+          const owner = await c.prisma.barberProfile.findUnique({ where: { slug: a.slug }, select: { id: true } });
+          if (owner) await releaseUnpaidHolds(c.prisma, owner.id).catch((e) => console.error("[barber] hold release failed", e instanceof Error ? e.message : e));
+          return publicSlots(c.prisma, a.slug, a.serviceId, a.date);
+        }),
         publicBooking: (_r, a, c) => run(() => readBooking(c.prisma, a.id, a.token)),
         myEarnings: (_r, a, c) => run(() => {
           const from = new Date(a.from);

@@ -110,6 +110,7 @@ model BarberProfile {
   minNoticeHours          Int                        @default(2)
   maxAdvanceDays          Int                        @default(60)
   cancellationWindowHours Int                        @default(24)
+  unpaidHoldHours         Int                        @default(6)
   noShowFeeCents          Int                        @default(0)
   workStyle               BarberProfileWorkStyleType @default(own_space)
   services                Service[]                  @relation("Service_profile")

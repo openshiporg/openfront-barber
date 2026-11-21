@@ -4,7 +4,7 @@ export type Hours = { dayOfWeek: string; isWorking: boolean; startMinute: number
 export type PublicService = { id: string; name: string; description: string | null; photoPath: string | null; priceCents: number; durationMinutes: number; depositCents: number }
 export type Business = {
   slug: string; businessName: string; bio: string | null; photoPath: string | null; phone: string | null; location: string | null; timezone: string
-  bookingOpen: boolean; currencyCode: string; maxAdvanceDays: number; cancellationWindowHours: number; services: PublicService[]; hours: Hours[]
+  bookingOpen: boolean; currencyCode: string; maxAdvanceDays: number; cancellationWindowHours: number; unpaidHoldHours: number; services: PublicService[]; hours: Hours[]
 }
 
 const ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']

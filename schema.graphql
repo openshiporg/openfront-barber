@@ -572,6 +572,7 @@ type BarberProfile {
   minNoticeHours: Int
   maxAdvanceDays: Int
   cancellationWindowHours: Int
+  unpaidHoldHours: Int
   noShowFeeCents: Int
   workStyle: BarberProfileWorkStyleType
   services(where: ServiceWhereInput! = {}, orderBy: [ServiceOrderByInput!]! = [], take: Int, skip: Int! = 0, cursor: ServiceWhereUniqueInput): [Service!]
@@ -635,6 +636,7 @@ input BarberProfileWhereInput {
   minNoticeHours: IntFilter
   maxAdvanceDays: IntFilter
   cancellationWindowHours: IntFilter
+  unpaidHoldHours: IntFilter
   noShowFeeCents: IntFilter
   workStyle: BarberProfileWorkStyleTypeNullableFilter
   services: ServiceManyRelationFilter
@@ -760,6 +762,7 @@ input BarberProfileOrderByInput {
   minNoticeHours: OrderDirection
   maxAdvanceDays: OrderDirection
   cancellationWindowHours: OrderDirection
+  unpaidHoldHours: OrderDirection
   noShowFeeCents: OrderDirection
   workStyle: OrderDirection
   createdAt: OrderDirection
@@ -783,6 +786,7 @@ input BarberProfileUpdateInput {
   minNoticeHours: Int
   maxAdvanceDays: Int
   cancellationWindowHours: Int
+  unpaidHoldHours: Int
   noShowFeeCents: Int
   workStyle: BarberProfileWorkStyleType
   services: ServiceRelateToManyForUpdateInput
@@ -907,6 +911,7 @@ input BarberProfileCreateInput {
   minNoticeHours: Int
   maxAdvanceDays: Int
   cancellationWindowHours: Int
+  unpaidHoldHours: Int
   noShowFeeCents: Int
   workStyle: BarberProfileWorkStyleType
   services: ServiceRelateToManyForCreateInput

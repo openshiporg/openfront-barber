@@ -51,7 +51,7 @@ function asString(value: unknown) {
   return typeof value === 'string' ? value : ''
 }
 
-export async function createPaymentFunction({ amount, currency, successUrl, cancelUrl, description, idempotencyKey, metadata, customerEmail }: PaymentAdapterArgs) {
+export async function createPaymentFunction({ amount, currency, successUrl, cancelUrl, description, idempotencyKey, metadata, customerEmail, expiresAt }: PaymentAdapterArgs) {
   const cents = Math.round(Number(amount))
   if (!Number.isSafeInteger(cents) || cents <= 0) throw new Error('Payment amount must be greater than zero.')
   const meta = (metadata && typeof metadata === 'object' ? metadata : {}) as Record<string, unknown>
@@ -60,6 +60,8 @@ export async function createPaymentFunction({ amount, currency, successUrl, canc
     idempotencyKey: asString(idempotencyKey) || undefined,
     body: form({
       mode: 'payment',
+      // Unix seconds; Stripe accepts 30 minutes to 24 hours from now.
+      expires_at: Number.isSafeInteger(expiresAt) ? Number(expiresAt) : undefined,
       success_url: asString(successUrl),
       cancel_url: asString(cancelUrl),
       ...(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(asString(customerEmail)) ? { customer_email: asString(customerEmail) } : {}),

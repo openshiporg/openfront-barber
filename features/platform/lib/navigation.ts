@@ -7,5 +7,5 @@ export interface PlatformNavItem { title: string; href: string; icon: LucideIcon
 export const platformNavItems: PlatformNavItem[] = [
   { title: 'Today', href: '/platform/today', icon: CalendarDays },
   { title: 'Earnings', href: '/platform/earnings', icon: Wallet },
-  { title: 'Set up business', href: '/platform/setup', icon: Settings },
+  { title: 'Settings', href: '/platform/setup', icon: Settings },
 ]
