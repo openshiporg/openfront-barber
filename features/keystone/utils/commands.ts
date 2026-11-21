@@ -36,7 +36,7 @@ export async function releaseUnpaidHolds(prisma: PrismaClient, profileId: string
     if ((await settleDeposit(prisma, a).catch(() => ({ paid: false }))).paid) continue
     const done = await prisma.appointment.updateMany({
       where: { id: a.id, ...UNPAID_HOLD },
-      data: { status: 'cancelled', cancellationReason: `Deposit not paid within ${profile.unpaidHoldHours} hours; time released` },
+      data: { status: 'cancelled', cancellationReason: `Deposit not paid within ${profile.unpaidHoldHours} ${profile.unpaidHoldHours === 1 ? 'hour' : 'hours'}; time released` },
     })
     if (!done.count) continue
     released++
