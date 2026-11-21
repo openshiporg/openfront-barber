@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "keystone build --no-ui && npm run migrate && next dev",
-    "build": "keystone build --no-ui && npm run migrate && next build",
+    "build": "keystone build --no-ui && next build",
     "start": "next start",
     "lint": "eslint .",
     "migrate:gen": "keystone build --no-ui && tsx features/keystone/view-order/generate-view-order.ts && keystone prisma migrate dev",
