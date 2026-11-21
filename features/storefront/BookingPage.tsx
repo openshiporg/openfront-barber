@@ -18,7 +18,7 @@ export default async function BookingPage({ params, searchParams }: { params: Pr
     <main className="mx-auto grid w-full max-w-xl gap-5 px-4 py-8">
       <h1 className="text-2xl font-semibold tracking-tight">{label[b.status] ?? b.status}</h1>
       <dl className="grid gap-px overflow-hidden rounded-md border bg-border text-sm">
-        {[['Barber', b.businessName], ['Service', b.serviceName || 'Appointment'], ['When', when], ['Price', money(b.priceCents)], ...(b.depositCents ? [['Deposit', `${money(b.depositCents)} · ${b.paymentStatus === 'deposit_paid' ? 'paid' : b.paymentStatus === 'refunded' ? 'refunded' : 'not paid yet'}`]] : []), ...(b.location ? [['Where', b.location]] : []), ...(b.phone ? [['Phone', b.phone]] : [])].map(([k, v]) => (
+        {[['Barber', b.businessName], ['Service', b.serviceName || 'Appointment'], ['When', when], ['Price', money(b.priceCents)], ...(b.depositCents ? [['Deposit', `${money(b.depositCents)} · ${b.paymentStatus === 'deposit_paid' ? 'paid' : b.paymentStatus === 'refunded' ? 'refunded' : open ? 'not paid yet' : 'not paid'}`]] : []), ...(b.location ? [['Where', b.location]] : []), ...(b.phone ? [['Phone', b.phone]] : [])].map(([k, v]) => (
           <div key={k} className="flex justify-between gap-4 bg-background px-4 py-2.5"><dt className="text-muted-foreground">{k}</dt><dd className="text-right">{v}</dd></div>
         ))}
       </dl>
