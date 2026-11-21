@@ -39,6 +39,10 @@ export function SetupForm() {
       <Field label="Timezone">
         <select name="timezone" className={inputClass} defaultValue={zones[0]}>{zones.map((z) => <option key={z} value={z}>{z.replace('_', ' ')}</option>)}</select>
       </Field>
+      <label className="flex min-h-11 items-start gap-3 rounded-md border px-3 py-2.5 text-sm">
+        <input type="checkbox" name="starterMenu" defaultChecked className="mt-0.5 size-4" />
+        <span><span className="block font-medium">Start with a typical menu</span><span className="block text-xs text-muted-foreground">Haircut, skin fade, cut and beard, beard trim and hot towel shave with photos and deposits, plus three retail products. Change any price or remove them later.</span></span>
+      </label>
       {error ? <Notice tone="alert">{error}</Notice> : null}
       <div><Btn type="submit" variant="primary" disabled={pending}>{pending ? 'Saving…' : 'Create my business'}</Btn></div>
     </form>

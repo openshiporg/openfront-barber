@@ -560,6 +560,7 @@ type BarberProfile {
   businessName: String
   slug: String
   bio: String
+  photoPath: String
   phone: String
   email: String
   location: String
@@ -622,6 +623,7 @@ input BarberProfileWhereInput {
   businessName: StringFilter
   slug: StringFilter
   bio: StringFilter
+  photoPath: StringFilter
   phone: StringFilter
   email: StringFilter
   location: StringFilter
@@ -746,6 +748,7 @@ input BarberProfileOrderByInput {
   businessName: OrderDirection
   slug: OrderDirection
   bio: OrderDirection
+  photoPath: OrderDirection
   phone: OrderDirection
   email: OrderDirection
   location: OrderDirection
@@ -768,6 +771,7 @@ input BarberProfileUpdateInput {
   businessName: String
   slug: String
   bio: String
+  photoPath: String
   phone: String
   email: String
   location: String
@@ -891,6 +895,7 @@ input BarberProfileCreateInput {
   businessName: String
   slug: String
   bio: String
+  photoPath: String
   phone: String
   email: String
   location: String
@@ -985,6 +990,7 @@ type Service {
   profile: BarberProfile
   name: String
   description: String
+  photoPath: String
   priceCents: Int
   durationMinutes: Int
   depositCents: Int
@@ -1008,6 +1014,7 @@ input ServiceWhereInput {
   profile: BarberProfileWhereInput
   name: StringFilter
   description: StringFilter
+  photoPath: StringFilter
   priceCents: IntFilter
   durationMinutes: IntFilter
   depositCents: IntFilter
@@ -1022,6 +1029,7 @@ input ServiceOrderByInput {
   id: OrderDirection
   name: OrderDirection
   description: OrderDirection
+  photoPath: OrderDirection
   priceCents: OrderDirection
   durationMinutes: OrderDirection
   depositCents: OrderDirection
@@ -1035,6 +1043,7 @@ input ServiceUpdateInput {
   profile: BarberProfileRelateToOneForUpdateInput
   name: String
   description: String
+  photoPath: String
   priceCents: Int
   durationMinutes: Int
   depositCents: Int
@@ -1054,6 +1063,7 @@ input ServiceCreateInput {
   profile: BarberProfileRelateToOneForCreateInput
   name: String
   description: String
+  photoPath: String
   priceCents: Int
   durationMinutes: Int
   depositCents: Int
@@ -2305,7 +2315,7 @@ type Mutation {
   createInitialUser(data: CreateInitialUserInput!): UserAuthenticationWithPasswordSuccess!
   sendUserPasswordResetLink(email: String!): Boolean!
   redeemUserPasswordResetToken(email: String!, token: String!, password: String!): RedeemUserPasswordResetTokenResult
-  setUpMyBusiness(businessName: String!, slug: String!, timezone: String!, phone: String, location: String, workStyle: String): CommandResult!
+  setUpMyBusiness(businessName: String!, slug: String!, timezone: String!, phone: String, location: String, workStyle: String, starterMenu: Boolean): CommandResult!
   bookOnline(slug: String!, serviceId: ID!, startsAt: String!, guest: GuestInput!): CommandResult!
   payDepositOnline(id: ID!, token: String!): CommandResult!
   confirmDepositOnline(id: ID!, token: String!): CommandResult!
@@ -2400,6 +2410,7 @@ type Query {
   validateUserPasswordResetToken(email: String!, token: String!): ValidateUserPasswordResetTokenResult
   redirectToInit: Boolean
   publicBusiness(slug: String!): JSON
+  homeBusiness: JSON
   publicSlots(slug: String!, serviceId: ID!, date: String!): CommandResult!
   publicBooking(id: ID!, token: String!): CommandResult!
   myEarnings(from: String!, to: String!): CommandResult!

@@ -25,6 +25,7 @@ export const BarberProfile = list({
       ui: { description: 'Your booking page address: /book/<this>.' },
     }),
     bio: text({ ui: { displayMode: 'textarea' } }),
+    photoPath: text({ ui: { description: 'Photo on your booking page: an image address, e.g. /images/barber/barber-at-work.webp or https://…' } }),
     phone: text(),
     email: text(),
     location: text({ ui: { description: 'Where clients find you: shop, booth, or mobile area.' } }),

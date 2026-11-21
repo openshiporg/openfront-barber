@@ -163,14 +163,30 @@ async function settleDeposit(db: Db, a: { id: string; profileId: string; status:
   return { paid: false }
 }
 
-/** Client cancels from their own link, inside the barber's cancellation window. */
+/**
+ * Client cancels from their own link, inside the barber's cancellation window. A deposit paid online is refunded
+ * through Stripe before the booking is cancelled; if Stripe refuses, the booking stays open and the client is told.
+ */
 export async function cancelByClient(db: Db, id: string, token: string) {
-  const a = await ownedByToken(db, id, token)
+  let a = await ownedByToken(db, id, token)
   if (!OPEN.includes(a.status as never)) throw new CommandError('This booking can no longer be cancelled here.')
   const hoursLeft = (a.startsAt.getTime() - Date.now()) / 3_600_000
   if (hoursLeft < a.profile.cancellationWindowHours) throw new CommandError(`Cancellations close ${a.profile.cancellationWindowHours} hours before the appointment. Call ${a.profile.phone || 'your barber'}.`)
+  // A deposit paid in a browser that never came back is read from Stripe first, so it is refunded too.
+  if (a.paymentStatus === 'unpaid' && a.depositCents > 0 && (await settleDeposit(db, a).catch(() => ({ paid: false }))).paid) a = await ownedByToken(db, id, token)
+  let refunded = false
+  if (a.paymentStatus === 'deposit_paid') {
+    try {
+      await refundDeposit(db, a.id, a.profileId)
+      refunded = true
+    } catch (error) {
+      if (error instanceof CommandError) throw error
+      console.error('[barber] client cancel refund failed', error instanceof Error ? error.message : error)
+      throw new CommandError(`Your deposit could not be refunded just now, so the booking is still on. Try again, or call ${a.profile.phone || 'your barber'}.`)
+    }
+  }
   await db.appointment.update({ where: { id: a.id }, data: { status: 'cancelled', cancellationReason: 'Cancelled by client' } })
-  return { cancelled: true }
+  return { cancelled: true, refunded }
 }
 
 /** Refund a Stripe deposit through the adapter (barber side). */

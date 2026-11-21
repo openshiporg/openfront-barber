@@ -14,8 +14,22 @@ function cents(value: unknown, label: string) {
   return n
 }
 
-/** First-run setup: the signed-in user gets their business, weekly hours and a way to be paid. */
-export async function setupBusiness(prisma: PrismaClient, session: Session | undefined, input: { businessName: string; slug: string; timezone: string; phone: string; location: string; workStyle: string }) {
+/** The usual menu of an independent barber, offered at setup so the booking page is ready to share. Prices are editable. */
+const STARTER_SERVICES = [
+  { name: 'Haircut', description: 'Scissor or clipper cut, styled and lined up.', priceCents: 3500, durationMinutes: 30, depositCents: 1000, photoPath: '/images/barber/scissor-cut.webp' },
+  { name: 'Skin fade', description: 'Fade down to the skin, blended by hand, with a line-up.', priceCents: 4000, durationMinutes: 45, depositCents: 1000, photoPath: '/images/barber/clipper-fade.webp' },
+  { name: 'Cut and beard', description: 'Full haircut plus beard shape-up with a hot towel.', priceCents: 5500, durationMinutes: 60, depositCents: 1500, photoPath: '/images/barber/barber-at-work.webp' },
+  { name: 'Beard trim', description: 'Beard shaped, lined and finished with oil.', priceCents: 2000, durationMinutes: 20, depositCents: 0, photoPath: '/images/barber/beard-detail.webp' },
+  { name: 'Hot towel shave', description: 'Straight-razor shave with hot towels and balm.', priceCents: 4500, durationMinutes: 45, depositCents: 1500, photoPath: '/images/barber/chair-service.webp' },
+]
+const STARTER_PRODUCTS = [
+  { name: 'Matte clay', priceCents: 2200, stock: 12 },
+  { name: 'Beard oil', priceCents: 1800, stock: 10 },
+  { name: 'Sea salt spray', priceCents: 1600, stock: 8 },
+]
+
+/** First-run setup: the signed-in user gets their business, weekly hours, a way to be paid and, if they want it, a starter menu. */
+export async function setupBusiness(prisma: PrismaClient, session: Session | undefined, input: { businessName: string; slug: string; timezone: string; phone: string; location: string; workStyle: string; starterMenu?: boolean }) {
   if (!session) throw new CommandError('Sign in first.')
   const name = input.businessName.trim().slice(0, 120)
   const slug = input.slug.trim().toLowerCase()
@@ -27,8 +41,15 @@ export async function setupBusiness(prisma: PrismaClient, session: Session | und
     if (await tx.barberProfile.findFirst({ where: { ownerId: session.itemId } })) throw new CommandError('Your business is already set up.')
     if (await tx.barberProfile.findUnique({ where: { slug } })) throw new CommandError('That booking address is taken. Try another.')
     const profile = await tx.barberProfile.create({
-      data: { ownerId: session.itemId, businessName: name, slug, timezone: input.timezone, phone: input.phone.trim() || undefined, location: input.location.trim() || undefined, workStyle: workStyle as never },
+      data: {
+        ownerId: session.itemId, businessName: name, slug, timezone: input.timezone, phone: input.phone.trim() || undefined, location: input.location.trim() || undefined, workStyle: workStyle as never,
+        ...(input.starterMenu ? { photoPath: '/images/barber/barber-chair.webp' } : {}),
+      },
     })
+    if (input.starterMenu) {
+      await tx.service.createMany({ data: STARTER_SERVICES.map((service, sortOrder) => ({ ...service, sortOrder, profileId: profile.id })) })
+      await tx.product.createMany({ data: STARTER_PRODUCTS.map((product) => ({ ...product, profileId: profile.id })) })
+    }
     await tx.weeklyHours.createMany({
       data: DAYS.map((dayOfWeek, i) => ({ profileId: profile.id, dayOfWeek: dayOfWeek as never, isWorking: i >= 2 && i <= 6, startMinute: 600, endMinute: 1080 })),
     })

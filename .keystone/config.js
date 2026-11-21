@@ -227,12 +227,8 @@ var User = (0, import_core.list)({
   access: {
     operation: {
       ...(0, import_access.allOperations)(isSignedIn),
-      create: (args) => {
-        if (process.env.PUBLIC_SIGNUPS_ALLOWED === "true") {
-          return true;
-        }
-        return permissions.canManagePeople(args);
-      },
+      // Barbers create their own account; the Barber role is attached below, never chosen by the caller.
+      create: () => true,
       delete: permissions.canManagePeople
     },
     filter: {
@@ -252,6 +248,15 @@ var User = (0, import_core.list)({
         if (session?.itemId === item?.id) return "edit";
         return "read";
       }
+    }
+  },
+  hooks: {
+    resolveInput: async ({ operation, resolvedData, context }) => {
+      if (operation !== "create" || context.session?.data?.role?.canManagePeople) return resolvedData;
+      const sudo = context.sudo();
+      const found = (await sudo.db.Role.findMany({ where: { name: { equals: "Barber" } }, take: 1 }))[0];
+      const role = found ?? await sudo.db.Role.createOne({ data: { name: "Barber", canAccessDashboard: true, canManageBusiness: true, canManageClients: true, canManageAppointments: true, canManagePayments: true, canViewEarnings: true } });
+      return { ...resolvedData, role: { connect: { id: role.id } } };
     }
   },
   fields: {
@@ -681,6 +686,7 @@ var BarberProfile = (0, import_core7.list)({
       ui: { description: "Your booking page address: /book/<this>." }
     }),
     bio: (0, import_fields6.text)({ ui: { displayMode: "textarea" } }),
+    photoPath: (0, import_fields6.text)({ ui: { description: "Photo on your booking page: an image address, e.g. /images/barber/barber-at-work.webp or https://\u2026" } }),
     phone: (0, import_fields6.text)(),
     email: (0, import_fields6.text)(),
     location: (0, import_fields6.text)({ ui: { description: "Where clients find you: shop, booth, or mobile area." } }),
@@ -738,6 +744,7 @@ var Service = (0, import_core8.list)({
     profile: (0, import_fields7.relationship)({ ref: "BarberProfile.services", db: { foreignKey: true, extendPrismaSchema: (schema) => schema.replaceAll("?", "") }, access: { create: () => false, update: () => false } }),
     name: (0, import_fields7.text)({ validation: { isRequired: true } }),
     description: (0, import_fields7.text)({ ui: { displayMode: "textarea" } }),
+    photoPath: (0, import_fields7.text)({ ui: { description: "Photo shown with this service: an image address, e.g. /images/barber/clipper-fade.webp or https://\u2026" } }),
     priceCents: (0, import_fields7.integer)({ validation: { isRequired: true, min: 0 }, ui: { description: "Price in cents." } }),
     durationMinutes: (0, import_fields7.integer)({ defaultValue: 30, validation: { isRequired: true, min: 5, max: 600 } }),
     depositCents: (0, import_fields7.integer)({ defaultValue: 0, validation: { isRequired: true, min: 0 }, ui: { description: "Paid online to hold the slot. 0 means pay at the chair." } }),
@@ -1397,7 +1404,8 @@ async function publicSlots(db, slug, serviceId, date) {
   const { start, end } = businessDayRange(date, profile.timezone);
   const [hours, appointments, off] = await Promise.all([
     db.weeklyHours.findFirst({ where: { profileId: profile.id, dayOfWeek: dayOfWeekFor(date) } }),
-    db.appointment.findMany({ where: { profileId: profile.id, status: { in: [...OPEN] }, startsAt: { lt: end }, endsAt: { gt: start } }, select: { startsAt: true, endsAt: true } }),
+    // An appointment added by hand without an end time blocks its service length (30 minutes with no service).
+    db.appointment.findMany({ where: { profileId: profile.id, status: { in: [...OPEN] }, startsAt: { lt: end }, OR: [{ endsAt: { gt: start } }, { endsAt: null, startsAt: { gt: new Date(start.getTime() - 864e5) } }] }, select: { startsAt: true, endsAt: true, service: { select: { durationMinutes: true } } } }).then((rows) => rows.map((row) => ({ startsAt: row.startsAt, endsAt: row.endsAt ?? new Date(row.startsAt.getTime() + (row.service?.durationMinutes ?? 30) * 6e4) }))),
     db.timeOff.findMany({ where: { profileId: profile.id, startsAt: { lt: end }, endsAt: { gt: start } }, select: { startsAt: true, endsAt: true } })
   ]);
   const busy = [...appointments, ...off].filter((row) => Boolean(row.startsAt && row.endsAt));
@@ -1441,7 +1449,7 @@ async function bookAppointment(prisma, input) {
     if (client?.status === "blocked") throw new CommandError("This time can\u2019t be booked online. Contact your barber.");
     const [first, ...rest] = guest.name.split(/\s+/);
     client ??= await tx.client.create({ data: { profileId: profile.id, firstName: first, lastName: rest.join(" ") || void 0, phone: guest.phone || void 0, email: guest.email || void 0 } });
-    const deposit = service.depositCents ?? 0;
+    const deposit = await depositProvider(tx, profile.id) ? service.depositCents ?? 0 : 0;
     const created = await tx.appointment.create({
       data: {
         profileId: profile.id,
@@ -1473,7 +1481,8 @@ async function depositProvider(db, profileId) {
   return db.paymentProvider.findFirst({ where: { profileId, code: "pp_stripe", isInstalled: true } });
 }
 async function readBooking(db, id, token) {
-  const a = await ownedByToken(db, id, token);
+  let a = await ownedByToken(db, id, token);
+  if (a.paymentStatus === "unpaid" && a.depositCents > 0 && (await settleDeposit(db, a).catch(() => ({ paid: false }))).paid) a = await ownedByToken(db, id, token);
   return {
     id: a.id,
     status: a.status,
@@ -1492,6 +1501,7 @@ async function readBooking(db, id, token) {
 async function startDepositCheckout(db, id, token) {
   const a = await ownedByToken(db, id, token);
   if (!OPEN.includes(a.status) || a.paymentStatus !== "unpaid" || a.depositCents <= 0) throw new CommandError("This booking has no deposit to pay.");
+  if ((await settleDeposit(db, a)).paid) throw new CommandError("Your deposit is already paid.");
   const provider = await depositProvider(db, a.profileId);
   if (!provider) throw new CommandError("Online deposits are not available. Pay your barber in person.");
   const origin = trustedOrigin();
@@ -1513,6 +1523,9 @@ async function startDepositCheckout(db, id, token) {
 }
 async function confirmDeposit(db, id, token) {
   const a = await ownedByToken(db, id, token);
+  return settleDeposit(db, a);
+}
+async function settleDeposit(db, a) {
   if (String(a.paymentStatus) !== "unpaid") return { paid: true };
   const sessions = await db.paymentSession.findMany({ where: { appointmentId: a.id, status: "pending" }, include: { paymentProvider: true } });
   for (const session of sessions) {
@@ -1523,20 +1536,33 @@ async function confirmDeposit(db, id, token) {
         const claimed = await tx.paymentSession.updateMany({ where: { id: session.id, status: "pending" }, data: { status: "captured", capturedAt: /* @__PURE__ */ new Date() } });
         if (!claimed.count) return;
         await tx.payment.create({ data: { profileId: a.profileId, appointmentId: a.id, method: "stripe", kind: "deposit", amountCents: session.amountCents, providerReference: session.providerPaymentId } });
-        await tx.appointment.update({ where: { id: a.id }, data: { paymentStatus: "deposit_paid", status: "confirmed" } });
+        await tx.appointment.update({ where: { id: a.id }, data: { paymentStatus: "deposit_paid", ...a.status === "requested" ? { status: "confirmed" } : {} } });
       });
+      if (a.status === "cancelled") await refundDeposit(db, a.id, a.profileId).catch(() => console.error("[barber] late deposit refund failed"));
       return { paid: true };
     }
   }
   return { paid: false };
 }
 async function cancelByClient(db, id, token) {
-  const a = await ownedByToken(db, id, token);
+  let a = await ownedByToken(db, id, token);
   if (!OPEN.includes(a.status)) throw new CommandError("This booking can no longer be cancelled here.");
   const hoursLeft = (a.startsAt.getTime() - Date.now()) / 36e5;
   if (hoursLeft < a.profile.cancellationWindowHours) throw new CommandError(`Cancellations close ${a.profile.cancellationWindowHours} hours before the appointment. Call ${a.profile.phone || "your barber"}.`);
+  if (a.paymentStatus === "unpaid" && a.depositCents > 0 && (await settleDeposit(db, a).catch(() => ({ paid: false }))).paid) a = await ownedByToken(db, id, token);
+  let refunded = false;
+  if (a.paymentStatus === "deposit_paid") {
+    try {
+      await refundDeposit(db, a.id, a.profileId);
+      refunded = true;
+    } catch (error) {
+      if (error instanceof CommandError) throw error;
+      console.error("[barber] client cancel refund failed", error instanceof Error ? error.message : error);
+      throw new CommandError(`Your deposit could not be refunded just now, so the booking is still on. Try again, or call ${a.profile.phone || "your barber"}.`);
+    }
+  }
   await db.appointment.update({ where: { id: a.id }, data: { status: "cancelled", cancellationReason: "Cancelled by client" } });
-  return { cancelled: true };
+  return { cancelled: true, refunded };
 }
 async function refundDeposit(db, appointmentId, profileId) {
   const payment = await db.payment.findFirst({ where: { appointmentId, profileId, method: "stripe", kind: "deposit", status: "paid" } });
@@ -1560,6 +1586,18 @@ function cents(value, label) {
   if (!Number.isSafeInteger(n) || n < 0 || n > 1e7) throw new CommandError(`${label} is not a valid amount.`);
   return n;
 }
+var STARTER_SERVICES = [
+  { name: "Haircut", description: "Scissor or clipper cut, styled and lined up.", priceCents: 3500, durationMinutes: 30, depositCents: 1e3, photoPath: "/images/barber/scissor-cut.webp" },
+  { name: "Skin fade", description: "Fade down to the skin, blended by hand, with a line-up.", priceCents: 4e3, durationMinutes: 45, depositCents: 1e3, photoPath: "/images/barber/clipper-fade.webp" },
+  { name: "Cut and beard", description: "Full haircut plus beard shape-up with a hot towel.", priceCents: 5500, durationMinutes: 60, depositCents: 1500, photoPath: "/images/barber/barber-at-work.webp" },
+  { name: "Beard trim", description: "Beard shaped, lined and finished with oil.", priceCents: 2e3, durationMinutes: 20, depositCents: 0, photoPath: "/images/barber/beard-detail.webp" },
+  { name: "Hot towel shave", description: "Straight-razor shave with hot towels and balm.", priceCents: 4500, durationMinutes: 45, depositCents: 1500, photoPath: "/images/barber/chair-service.webp" }
+];
+var STARTER_PRODUCTS = [
+  { name: "Matte clay", priceCents: 2200, stock: 12 },
+  { name: "Beard oil", priceCents: 1800, stock: 10 },
+  { name: "Sea salt spray", priceCents: 1600, stock: 8 }
+];
 async function setupBusiness(prisma, session, input) {
   if (!session) throw new CommandError("Sign in first.");
   const name = input.businessName.trim().slice(0, 120);
@@ -1576,13 +1614,26 @@ async function setupBusiness(prisma, session, input) {
     if (await tx.barberProfile.findFirst({ where: { ownerId: session.itemId } })) throw new CommandError("Your business is already set up.");
     if (await tx.barberProfile.findUnique({ where: { slug } })) throw new CommandError("That booking address is taken. Try another.");
     const profile = await tx.barberProfile.create({
-      data: { ownerId: session.itemId, businessName: name, slug, timezone: input.timezone, phone: input.phone.trim() || void 0, location: input.location.trim() || void 0, workStyle }
+      data: {
+        ownerId: session.itemId,
+        businessName: name,
+        slug,
+        timezone: input.timezone,
+        phone: input.phone.trim() || void 0,
+        location: input.location.trim() || void 0,
+        workStyle,
+        ...input.starterMenu ? { photoPath: "/images/barber/barber-chair.webp" } : {}
+      }
     });
+    if (input.starterMenu) {
+      await tx.service.createMany({ data: STARTER_SERVICES.map((service, sortOrder) => ({ ...service, sortOrder, profileId: profile.id })) });
+      await tx.product.createMany({ data: STARTER_PRODUCTS.map((product) => ({ ...product, profileId: profile.id })) });
+    }
     await tx.weeklyHours.createMany({
       data: DAYS2.map((dayOfWeek, i) => ({ profileId: profile.id, dayOfWeek, isWorking: i >= 2 && i <= 6, startMinute: 600, endMinute: 1080 }))
     });
     await tx.paymentProvider.create({ data: { profileId: profile.id, name: "In person", code: "pp_manual" } });
-    if (process.env.STRIPE_SECRET_KEY) await tx.paymentProvider.create({ data: { profileId: profile.id, name: "Card online", code: "pp_stripe", createPaymentFunction: "stripe", capturePaymentFunction: "stripe", refundPaymentFunction: "stripe", getPaymentStatusFunction: "stripe", generatePaymentLinkFunction: "stripe", handleWebhookFunction: "stripe" } });
+    await tx.paymentProvider.create({ data: { profileId: profile.id, name: "Card online", code: "pp_stripe", createPaymentFunction: "stripe", capturePaymentFunction: "stripe", refundPaymentFunction: "stripe", getPaymentStatusFunction: "stripe", generatePaymentLinkFunction: "stripe", handleWebhookFunction: "stripe" } });
     await tx.user.update({ where: { id: session.itemId }, data: { onboardingStatus: "done" } });
     return { slug: profile.slug };
   });
@@ -1643,10 +1694,14 @@ async function earnings(prisma, session, from, to) {
     prisma.payment.aggregate({ where, _sum: { amountCents: true, tipCents: true, productsCents: true } }),
     prisma.payment.groupBy({ by: ["method"], where, _sum: { amountCents: true, tipCents: true, productsCents: true } }),
     prisma.appointment.count({ where: { profileId: profile.id, status: "completed", startsAt: { gte: from, lt: to } } }),
-    prisma.chairRental.findMany({ where: { profileId: profile.id, status: "active" } })
+    prisma.chairRental.findMany({ where: { profileId: profile.id } })
   ]);
-  const days = Math.max(1, (to.getTime() - from.getTime()) / 864e5);
-  const rent = rentals.reduce((total, r) => total + Math.round(r.rentCents * (days / (r.period === "weekly" ? 7 : 30))), 0);
+  const rent = rentals.reduce((total, r) => {
+    const runsFrom = Math.max(from.getTime(), (r.startsOn ?? r.createdAt).getTime());
+    const runsTo = Math.min(to.getTime(), (r.endsOn ?? (r.status === "ended" ? r.updatedAt : to)).getTime());
+    const days = Math.max(0, (runsTo - runsFrom) / 864e5);
+    return total + Math.round(r.rentCents * (days / (r.period === "weekly" ? 7 : 30)));
+  }, 0);
   return {
     servicesCents: sum._sum.amountCents ?? 0,
     tipsCents: sum._sum.tipCents ?? 0,
@@ -1667,6 +1722,26 @@ var run = async (work) => {
     return fail(error);
   }
 };
+async function publicBusiness(prisma, where) {
+  const p = await prisma.barberProfile.findUnique({ where, include: { services: { where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }, weeklyHours: true } });
+  if (!p) return null;
+  const takesDeposits = Boolean(await depositProvider(prisma, p.id));
+  return {
+    slug: p.slug,
+    businessName: p.businessName,
+    bio: p.bio,
+    photoPath: p.photoPath,
+    phone: p.phone,
+    location: p.location,
+    timezone: p.timezone,
+    bookingOpen: p.bookingOpen,
+    currencyCode: p.currencyCode,
+    maxAdvanceDays: p.maxAdvanceDays,
+    cancellationWindowHours: p.cancellationWindowHours,
+    services: p.services.map((s) => ({ id: s.id, name: s.name, description: s.description, photoPath: s.photoPath, priceCents: s.priceCents, durationMinutes: s.durationMinutes, depositCents: takesDeposits ? s.depositCents : 0 })),
+    hours: p.weeklyHours.map((h) => ({ dayOfWeek: h.dayOfWeek, isWorking: h.isWorking, startMinute: h.startMinute, endMinute: h.endMinute }))
+  };
+}
 function extendGraphqlSchema(baseSchema) {
   return (0, import_schema.mergeSchemas)({
     schemas: [baseSchema],
@@ -1678,12 +1753,13 @@ function extendGraphqlSchema(baseSchema) {
       type Query {
         redirectToInit: Boolean
         publicBusiness(slug: String!): JSON
+        homeBusiness: JSON
         publicSlots(slug: String!, serviceId: ID!, date: String!): CommandResult!
         publicBooking(id: ID!, token: String!): CommandResult!
         myEarnings(from: String!, to: String!): CommandResult!
       }
       type Mutation {
-        setUpMyBusiness(businessName: String!, slug: String!, timezone: String!, phone: String, location: String, workStyle: String): CommandResult!
+        setUpMyBusiness(businessName: String!, slug: String!, timezone: String!, phone: String, location: String, workStyle: String, starterMenu: Boolean): CommandResult!
         bookOnline(slug: String!, serviceId: ID!, startsAt: String!, guest: GuestInput!): CommandResult!
         payDepositOnline(id: ID!, token: String!): CommandResult!
         confirmDepositOnline(id: ID!, token: String!): CommandResult!
@@ -1696,22 +1772,11 @@ function extendGraphqlSchema(baseSchema) {
     resolvers: {
       Query: {
         redirectToInit: redirectToInit_default,
-        publicBusiness: async (_r, { slug }, c) => {
-          const p = await c.prisma.barberProfile.findUnique({ where: { slug }, include: { services: { where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }, weeklyHours: true } });
-          if (!p) return null;
-          return {
-            businessName: p.businessName,
-            bio: p.bio,
-            phone: p.phone,
-            location: p.location,
-            timezone: p.timezone,
-            bookingOpen: p.bookingOpen,
-            currencyCode: p.currencyCode,
-            maxAdvanceDays: p.maxAdvanceDays,
-            cancellationWindowHours: p.cancellationWindowHours,
-            services: p.services.map((s) => ({ id: s.id, name: s.name, description: s.description, priceCents: s.priceCents, durationMinutes: s.durationMinutes, depositCents: s.depositCents })),
-            hours: p.weeklyHours.map((h) => ({ dayOfWeek: h.dayOfWeek, isWorking: h.isWorking, startMinute: h.startMinute, endMinute: h.endMinute }))
-          };
+        publicBusiness: (_r, { slug }, c) => publicBusiness(c.prisma, { slug }),
+        // The home page shows the first barber who set up a booking page on this deployment.
+        homeBusiness: async (_r, _a, c) => {
+          const first = await c.prisma.barberProfile.findFirst({ where: { bookingOpen: true }, orderBy: { createdAt: "asc" }, select: { slug: true } });
+          return first ? publicBusiness(c.prisma, { slug: first.slug }) : null;
         },
         publicSlots: (_r, a, c) => run(() => publicSlots(c.prisma, a.slug, a.serviceId, a.date)),
         publicBooking: (_r, a, c) => run(() => readBooking(c.prisma, a.id, a.token)),
@@ -1723,7 +1788,7 @@ function extendGraphqlSchema(baseSchema) {
         })
       },
       Mutation: {
-        setUpMyBusiness: (_r, a, c) => run(() => setupBusiness(c.prisma, c.session, { businessName: a.businessName, slug: a.slug, timezone: a.timezone, phone: a.phone ?? "", location: a.location ?? "", workStyle: a.workStyle ?? "own_space" })),
+        setUpMyBusiness: (_r, a, c) => run(() => setupBusiness(c.prisma, c.session, { businessName: a.businessName, slug: a.slug, timezone: a.timezone, phone: a.phone ?? "", location: a.location ?? "", workStyle: a.workStyle ?? "own_space", starterMenu: a.starterMenu ?? false })),
         bookOnline: (_r, a, c) => run(() => bookAppointment(c.prisma, { slug: a.slug, serviceId: a.serviceId, startsAt: a.startsAt, guest: { name: a.guest.name, phone: a.guest.phone ?? "", email: a.guest.email ?? "", notes: a.guest.notes ?? "" } })),
         payDepositOnline: (_r, a, c) => run(() => startDepositCheckout(c.prisma, a.id, a.token)),
         confirmDepositOnline: (_r, a, c) => run(() => confirmDeposit(c.prisma, a.id, a.token)),

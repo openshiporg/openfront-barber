@@ -20,6 +20,18 @@ const run = async <T>(work: () => Promise<T>) => {
   }
 }
 
+async function publicBusiness(prisma: PrismaClient, where: { slug: string }) {
+  const p = await prisma.barberProfile.findUnique({ where, include: { services: { where: { active: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }, weeklyHours: true } })
+  if (!p) return null
+  const takesDeposits = Boolean(await depositProvider(prisma, p.id))
+  return {
+    slug: p.slug, businessName: p.businessName, bio: p.bio, photoPath: p.photoPath, phone: p.phone, location: p.location, timezone: p.timezone, bookingOpen: p.bookingOpen, currencyCode: p.currencyCode,
+    maxAdvanceDays: p.maxAdvanceDays, cancellationWindowHours: p.cancellationWindowHours,
+    services: p.services.map((s) => ({ id: s.id, name: s.name, description: s.description, photoPath: s.photoPath, priceCents: s.priceCents, durationMinutes: s.durationMinutes, depositCents: takesDeposits ? s.depositCents : 0 })),
+    hours: p.weeklyHours.map((h) => ({ dayOfWeek: h.dayOfWeek, isWorking: h.isWorking, startMinute: h.startMinute, endMinute: h.endMinute })),
+  }
+}
+
 export function extendGraphqlSchema(baseSchema: GraphQLSchema) {
   return mergeSchemas({
     schemas: [baseSchema],
@@ -31,12 +43,13 @@ export function extendGraphqlSchema(baseSchema: GraphQLSchema) {
       type Query {
         redirectToInit: Boolean
         publicBusiness(slug: String!): JSON
+        homeBusiness: JSON
         publicSlots(slug: String!, serviceId: ID!, date: String!): CommandResult!
         publicBooking(id: ID!, token: String!): CommandResult!
         myEarnings(from: String!, to: String!): CommandResult!
       }
       type Mutation {
-        setUpMyBusiness(businessName: String!, slug: String!, timezone: String!, phone: String, location: String, workStyle: String): CommandResult!
+        setUpMyBusiness(businessName: String!, slug: String!, timezone: String!, phone: String, location: String, workStyle: String, starterMenu: Boolean): CommandResult!
         bookOnline(slug: String!, serviceId: ID!, startsAt: String!, guest: GuestInput!): CommandResult!
         payDepositOnline(id: ID!, token: String!): CommandResult!
         confirmDepositOnline(id: ID!, token: String!): CommandResult!
@@ -49,16 +62,11 @@ export function extendGraphqlSchema(baseSchema: GraphQLSchema) {
     resolvers: {
       Query: {
         redirectToInit,
-        publicBusiness: async (_r: unknown, { slug }: { slug: string }, c: Ctx) => {
-          const p = await c.prisma.barberProfile.findUnique({ where: { slug }, include: { services: { where: { active: true }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }, weeklyHours: true } })
-          if (!p) return null
-          const takesDeposits = Boolean(await depositProvider(c.prisma, p.id))
-          return {
-            businessName: p.businessName, bio: p.bio, phone: p.phone, location: p.location, timezone: p.timezone, bookingOpen: p.bookingOpen, currencyCode: p.currencyCode,
-            maxAdvanceDays: p.maxAdvanceDays, cancellationWindowHours: p.cancellationWindowHours,
-            services: p.services.map((s) => ({ id: s.id, name: s.name, description: s.description, priceCents: s.priceCents, durationMinutes: s.durationMinutes, depositCents: takesDeposits ? s.depositCents : 0 })),
-            hours: p.weeklyHours.map((h) => ({ dayOfWeek: h.dayOfWeek, isWorking: h.isWorking, startMinute: h.startMinute, endMinute: h.endMinute })),
-          }
+        publicBusiness: (_r: unknown, { slug }: { slug: string }, c: Ctx) => publicBusiness(c.prisma, { slug }),
+        // The home page shows the first barber who set up a booking page on this deployment.
+        homeBusiness: async (_r: unknown, _a: unknown, c: Ctx) => {
+          const first = await c.prisma.barberProfile.findFirst({ where: { bookingOpen: true }, orderBy: { createdAt: 'asc' }, select: { slug: true } })
+          return first ? publicBusiness(c.prisma, { slug: first.slug }) : null
         },
         publicSlots: (_r: unknown, a: { slug: string; serviceId: string; date: string }, c: Ctx) => run(() => publicSlots(c.prisma, a.slug, a.serviceId, a.date)),
         publicBooking: (_r: unknown, a: { id: string; token: string }, c: Ctx) => run(() => readBooking(c.prisma, a.id, a.token)),
@@ -69,8 +77,8 @@ export function extendGraphqlSchema(baseSchema: GraphQLSchema) {
         }),
       },
       Mutation: {
-        setUpMyBusiness: (_r: unknown, a: { businessName: string; slug: string; timezone: string; phone?: string; location?: string; workStyle?: string }, c: Ctx) =>
-          run(() => setupBusiness(c.prisma, c.session, { businessName: a.businessName, slug: a.slug, timezone: a.timezone, phone: a.phone ?? '', location: a.location ?? '', workStyle: a.workStyle ?? 'own_space' })),
+        setUpMyBusiness: (_r: unknown, a: { businessName: string; slug: string; timezone: string; phone?: string; location?: string; workStyle?: string; starterMenu?: boolean }, c: Ctx) =>
+          run(() => setupBusiness(c.prisma, c.session, { businessName: a.businessName, slug: a.slug, timezone: a.timezone, phone: a.phone ?? '', location: a.location ?? '', workStyle: a.workStyle ?? 'own_space', starterMenu: a.starterMenu ?? false })),
         bookOnline: (_r: unknown, a: { slug: string; serviceId: string; startsAt: string; guest: { name: string; phone?: string; email?: string; notes?: string } }, c: Ctx) =>
           run(() => bookAppointment(c.prisma, { slug: a.slug, serviceId: a.serviceId, startsAt: a.startsAt, guest: { name: a.guest.name, phone: a.guest.phone ?? '', email: a.guest.email ?? '', notes: a.guest.notes ?? '' } })),
         payDepositOnline: (_r: unknown, a: { id: string; token: string }, c: Ctx) => run(() => startDepositCheckout(c.prisma, a.id, a.token)),

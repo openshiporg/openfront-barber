@@ -21,6 +21,7 @@ export const Service = list({
     profile: relationship({ ref: 'BarberProfile.services', db: { foreignKey: true, extendPrismaSchema: (schema) => schema.replaceAll('?', '') }, access: { create: () => false, update: () => false } }),
     name: text({ validation: { isRequired: true } }),
     description: text({ ui: { displayMode: 'textarea' } }),
+    photoPath: text({ ui: { description: 'Photo shown with this service: an image address, e.g. /images/barber/clipper-fade.webp or https://…' } }),
     priceCents: integer({ validation: { isRequired: true, min: 0 }, ui: { description: 'Price in cents.' } }),
     durationMinutes: integer({ defaultValue: 30, validation: { isRequired: true, min: 5, max: 600 } }),
     depositCents: integer({ defaultValue: 0, validation: { isRequired: true, min: 0 }, ui: { description: 'Paid online to hold the slot. 0 means pay at the chair.' } }),

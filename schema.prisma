@@ -98,6 +98,7 @@ model BarberProfile {
   businessName            String                     @default("")
   slug                    String                     @unique @default("")
   bio                     String                     @default("")
+  photoPath               String                     @default("")
   phone                   String                     @default("")
   email                   String                     @default("")
   location                String                     @default("")
@@ -133,6 +134,7 @@ model Service {
   profileId       String        @map("profile")
   name            String        @default("")
   description     String        @default("")
+  photoPath       String        @default("")
   priceCents      Int
   durationMinutes Int           @default(30)
   depositCents    Int           @default(0)

@@ -6,13 +6,13 @@ import { Btn, Field, Notice, inputClass, money } from '@/features/platform/lib/u
 import { book, loadSlots } from './actions'
 
 type Service = { id: string; name: string; description: string | null; priceCents: number; durationMinutes: number; depositCents: number }
-type Props = { slug: string; timezone: string; currency: string; maxAdvanceDays: number; services: Service[] }
+type Props = { slug: string; timezone: string; currency: string; maxAdvanceDays: number; services: Service[]; initialServiceId?: string }
 
 const dateKey = (d: Date, tz: string) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d)
 
-export function BookingFlow({ slug, timezone, currency, maxAdvanceDays, services }: Props) {
+export function BookingFlow({ slug, timezone, currency, maxAdvanceDays, services, initialServiceId }: Props) {
   const router = useRouter()
-  const [serviceId, setServiceId] = useState(services[0]?.id ?? '')
+  const [serviceId, setServiceId] = useState(services.some((s) => s.id === initialServiceId) ? initialServiceId! : services[0]?.id ?? '')
   const today = useMemo(() => dateKey(new Date(), timezone), [timezone])
   const maxDate = useMemo(() => dateKey(new Date(Date.now() + maxAdvanceDays * 86_400_000), timezone), [maxAdvanceDays, timezone])
   const [date, setDate] = useState(today)

@@ -7,7 +7,7 @@ Openfront Barber is a self-hostable booking, payments and earnings application f
 ## What you get
 
 - **Your booking page** at `/book/your-address`: services, open times from your own hours and time off, and no double booking.
-- **Deposits** through Stripe Checkout. The deposit is confirmed by reading the payment back from Stripe, and cancelling refunds it.
+- **Deposits** through Stripe Checkout. The deposit is confirmed by reading the payment back from Stripe. A client who cancels from their booking link before your cancellation window (24 hours by default) gets the deposit refunded to their card automatically; so does any booking you cancel.
 - **Today**: open appointments with client notes and preferences; check out with price, tip, product sold and how the client paid (cash, card, Zelle/Venmo/Cash App); mark no-shows.
 - **Earnings**: services, tips and products for the last week, month or year, less chair rent.
 - **Clients, services, hours, time off, products and chair rental** under Models. A barber only ever sees their own records.
@@ -20,7 +20,7 @@ cp .env.example .env   # DATABASE_URL, SESSION_SECRET, optional STRIPE_SECRET_KE
 npm run dev
 ```
 
-Open `/dashboard`, create your account, then **Set up business** to choose your booking address, timezone and hours. Add services under Models → Services. Set `STRIPE_SECRET_KEY` to take deposits online; without it clients are told to pay in person.
+Open `/dashboard`, create your account, then **Set up business** to choose your booking address and timezone. Leave **Start with a typical menu** ticked to begin with five services (with photos and deposits) and three retail products you can edit; your home page then shows your services, hours and a Book button. Set `STRIPE_SECRET_KEY` to take deposits online; without it clients are told to pay in person.
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fopenshiporg%2Fopenfront-barber&env=DATABASE_URL%2CSESSION_SECRET)
 
@@ -38,7 +38,7 @@ Every Openfront is open source and self-hostable.
 | Openfront Rental | Short-term rental bookings and calendars | [openfront-rental](https://github.com/openshiporg/openfront-rental) | [rental.openship.org](https://rental.openship.org) | [Docs](https://docs.openship.org/docs/openfront/rental) |
 | Openfront Salon | Appointments, stylists and services | [openfront-salon](https://github.com/openshiporg/openfront-salon) | [salon.openship.org](https://salon.openship.org) | [Docs](https://docs.openship.org/docs/openfront/salon) |
 | Openfront Barbershop | Bookings, walk-ins and barbers | [openfront-barbershop](https://github.com/openshiporg/openfront-barbershop) | [barbershop.openship.org](https://barbershop.openship.org) | [Docs](https://docs.openship.org/docs/openfront/barbershop) |
-| **Openfront Barber** (this repository) | The barber who runs their own business | [openfront-barber](https://github.com/openshiporg/openfront-barber) | Not deployed yet | Not published yet |
+| **Openfront Barber** (this repository) | The barber who runs their own business | [openfront-barber](https://github.com/openshiporg/openfront-barber) | [barber.openship.org](https://barber.openship.org) | Not published yet |
 | Openfront Coffee Shop | Café ordering and counter POS | [openfront-coffeeshop](https://github.com/openshiporg/openfront-coffeeshop) | [coffee-shop.openship.org](https://coffee-shop.openship.org) | [Docs](https://docs.openship.org/docs/openfront/coffee-shop) |
 | Openfront Real Estate | Listings, showings and transactions | [openfront-realestate](https://github.com/openshiporg/openfront-realestate) | [real-estate.openship.org](https://real-estate.openship.org) | [Docs](https://docs.openship.org/docs/openfront/real-estate) |
 | Openfront Dealership | Inventory, test drives, deals and service | [openfront-dealership](https://github.com/openshiporg/openfront-dealership) | [dealership.openship.org](https://dealership.openship.org) | [Docs](https://docs.openship.org/docs/openfront/dealership) |
